@@ -1,12 +1,13 @@
 // lib/screens/phonics_quiz_screen.dart
+//
+// Question order randomised every session via GameRoundRandomizer.
+
 import 'package:flutter/material.dart';
-
 import 'package:provider/provider.dart';
-
 import '../providers/app_provider.dart';
-
 import '../data/letter_data.dart';
 import '../models/difficulty.dart';
+import '../services/game_round_randomizer.dart';
 import '../widgets/learner_widgets.dart';
 import '../theme/kids_ui.dart';
 
@@ -19,26 +20,34 @@ class PhonicsQuizScreen extends StatefulWidget {
 
 class _PhonicsQuizScreenState extends State<PhonicsQuizScreen>
     with GameSessionUi<PhonicsQuizScreen> {
+  late List<QuizQuestion> _activeQuestions;
   int _qIndex = 0;
   String? _selected;
   bool _answered = false;
-
   late List<String> _shuffledOpts;
 
-  List<QuizQuestion> get _questions =>
-      quizQuestionsForDifficulty(widget.difficulty);
+  QuizQuestion get _q => _activeQuestions[_qIndex];
 
   @override
   void initState() {
     super.initState();
+    _buildSession();
+  }
+
+  void _buildSession() {
+    final all = quizQuestionsForDifficulty(widget.difficulty);
+    final indices = GameRoundRandomizer()
+        .nextSession('phonics_quiz', widget.difficulty, all.length);
+    _activeQuestions = indices.map((i) => all[i]).toList();
+    _qIndex = 0;
+    _selected = null;
+    _answered = false;
     _shuffleOpts();
   }
 
   void _shuffleOpts() {
-    _shuffledOpts = List<String>.from(_questions[_qIndex].options)..shuffle();
+    _shuffledOpts = List<String>.from(_q.options)..shuffle();
   }
-
-  QuizQuestion get _q => _questions[_qIndex];
 
   void _pick(String letter) async {
     if (_answered) return;
@@ -47,7 +56,6 @@ class _PhonicsQuizScreenState extends State<PhonicsQuizScreen>
       _selected = letter;
       _answered = true;
     });
-
     final provider = context.read<AppProvider>();
     recordGameAnswer(correct: isCorrect);
     if (isCorrect) {
@@ -63,7 +71,7 @@ class _PhonicsQuizScreenState extends State<PhonicsQuizScreen>
 
   void _nextQuestion() {
     if (!_answered || resultOpen) return;
-    if (_qIndex < _questions.length - 1) {
+    if (_qIndex < _activeQuestions.length - 1) {
       setState(() {
         _qIndex++;
         _selected = null;
@@ -75,15 +83,7 @@ class _PhonicsQuizScreenState extends State<PhonicsQuizScreen>
     }
   }
 
-  void _restart() {
-    setState(() {
-      _qIndex = 0;
-      _selected = null;
-      _answered = false;
-
-      _shuffleOpts();
-    });
-  }
+  void _restart() => setState(_buildSession);
 
   void _showResults() {
     if (resultOpen) return;
@@ -92,22 +92,24 @@ class _PhonicsQuizScreenState extends State<PhonicsQuizScreen>
     provider.recordActivityCompleted();
     awardGameXp((20 * widget.difficulty.xpMultiplier).round());
     provider.audio.playWin();
-
     showGameResult(_restart, backLabel: 'Back to Games');
   }
 
   @override
   Widget build(BuildContext context) => GameScaffold(
         title: 'Phonics Quiz',
-        instructions: 'Listen to the word. Tap the matching letter or letters.',
+        instructions:
+            'Listen to the word. Tap the matching letter or letters.',
         difficulty: widget.difficulty,
         hasProgress: scoredAttempts > 0 && !resultOpen,
         current: _qIndex + 1,
-        total: _questions.length,
+        total: _activeQuestions.length,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Center(child: GameImageCard(
-              word: _q.word[0] + _q.word.substring(1).toLowerCase())),
+          Center(
+              child: GameImageCard(
+                  word:
+                      _q.word[0] + _q.word.substring(1).toLowerCase())),
           const SizedBox(height: KidsUi.padding),
           Text(_q.question,
               textAlign: TextAlign.center,
@@ -118,8 +120,10 @@ class _PhonicsQuizScreenState extends State<PhonicsQuizScreen>
           ..._shuffledOpts.map((option) => GameAnswerButton(
               label: letterChoiceLabel(option),
               selected: _selected == option,
-              result: _selected == option ? option == _q.correctLetter : null,
-              onPressed: _answered || resultOpen ? null : () => _pick(option))),
+              result:
+                  _selected == option ? option == _q.correctLetter : null,
+              onPressed:
+                  _answered || resultOpen ? null : () => _pick(option))),
           if (_selected != null)
             GameFeedback(correct: _selected == _q.correctLetter),
           if (_answered)

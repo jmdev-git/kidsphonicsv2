@@ -1,12 +1,13 @@
 // lib/screens/sound_match_screen.dart
+//
+// Round order randomised every session via GameRoundRandomizer.
+
 import 'package:flutter/material.dart';
-
 import 'package:provider/provider.dart';
-
 import '../providers/app_provider.dart';
-
 import '../data/letter_data.dart';
 import '../models/difficulty.dart';
+import '../services/game_round_randomizer.dart';
 import '../widgets/learner_widgets.dart';
 import '../theme/kids_ui.dart';
 
@@ -19,49 +20,45 @@ class SoundMatchScreen extends StatefulWidget {
 
 class _SoundMatchScreenState extends State<SoundMatchScreen>
     with GameSessionUi<SoundMatchScreen> {
+  late List<SoundRound> _activeRounds;
   int _roundIndex = 0;
-
-  Map<String, bool?> _picks = {}; // letter -> correct?
+  Map<String, bool?> _picks = {};
   bool _roundDone = false;
-
-  List<SoundRound> get _rounds => soundRoundsForDifficulty(widget.difficulty);
-  SoundRound get _round => _rounds[_roundIndex];
-  List<String> get _shuffledOpts {
-    final opts = List<String>.from(_round.options);
-    opts.shuffle();
-    return opts;
-  }
-
   late List<String> _opts;
+
+  SoundRound get _round => _activeRounds[_roundIndex];
 
   @override
   void initState() {
     super.initState();
-    _opts = _shuffledOpts;
+    _buildSession();
+  }
+
+  void _buildSession() {
+    final all = soundRoundsForDifficulty(widget.difficulty);
+    final indices = GameRoundRandomizer()
+        .nextSession('sound_match', widget.difficulty, all.length);
+    _activeRounds = indices.map((i) => all[i]).toList();
+    _roundIndex = 0;
+    _picks = {};
+    _roundDone = false;
+    _opts = List<String>.from(_round.options)..shuffle();
   }
 
   void _nextRound() {
-    if (_roundIndex < _rounds.length - 1) {
+    if (_roundIndex < _activeRounds.length - 1) {
       setState(() {
         _roundIndex++;
         _picks = {};
         _roundDone = false;
-        _opts = _shuffledOpts;
+        _opts = List<String>.from(_round.options)..shuffle();
       });
     } else {
       _showWinDialog();
     }
   }
 
-  void _restart() {
-    setState(() {
-      _roundIndex = 0;
-
-      _picks = {};
-      _roundDone = false;
-      _opts = _shuffledOpts;
-    });
-  }
+  void _restart() => setState(_buildSession);
 
   void _showWinDialog() {
     if (resultOpen) return;
@@ -70,21 +67,17 @@ class _SoundMatchScreenState extends State<SoundMatchScreen>
     provider.recordActivityCompleted();
     awardGameXp((10 * widget.difficulty.xpMultiplier).round());
     provider.audio.playWin();
-
     showGameResult(_restart, backLabel: 'Back to Games');
   }
 
   void _pick(String letter) async {
     if (_roundDone || _picks.values.contains(false) || resultOpen) return;
-    // Block re-tap only if already marked correct (green) — wrong picks are retryable
     if (_picks[letter] == true) return;
 
     final isCorrect = letter == _round.correctLetter;
     setState(() {
       _picks[letter] = isCorrect;
-      if (isCorrect) {
-        _roundDone = true;
-      }
+      if (isCorrect) _roundDone = true;
     });
     final provider = context.read<AppProvider>();
     recordGameAnswer(correct: isCorrect);
@@ -92,11 +85,9 @@ class _SoundMatchScreenState extends State<SoundMatchScreen>
       provider.audio.playCorrect();
       awardGameXp((5 * widget.difficulty.xpMultiplier).round());
       awardGameStar();
-      // No voice — correct.mp3 tone only, then move to next round
       await Future.delayed(const Duration(milliseconds: 1000));
       if (mounted) _nextRound();
     } else {
-      // Wrong — play tone, show red flash briefly, then clear so child can retry
       provider.audio.playWrong();
       await Future.delayed(const Duration(milliseconds: 800));
       if (mounted) setState(() => _picks.remove(letter));
@@ -111,11 +102,13 @@ class _SoundMatchScreenState extends State<SoundMatchScreen>
         difficulty: widget.difficulty,
         hasProgress: scoredAttempts > 0 && !resultOpen,
         current: _roundIndex + 1,
-        total: _rounds.length,
+        total: _activeRounds.length,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Center(child: GameImageCard(
-              word: _round.word[0] + _round.word.substring(1).toLowerCase())),
+          Center(
+              child: GameImageCard(
+                  word: _round.word[0] +
+                      _round.word.substring(1).toLowerCase())),
           const SizedBox(height: KidsUi.padding),
           Text(_round.question,
               textAlign: TextAlign.center,

@@ -6,13 +6,13 @@
 //   Easy   → A–F  (6 letters)
 //   Medium → A–M  (13 letters)
 //   Hard   → A–Z  (26 letters)
+//
+// The displayed layout is reshuffled each session so the grid never
+// looks the same twice, even though the correct tap-order is always A→Z.
 
 import 'package:flutter/material.dart';
-
 import 'package:provider/provider.dart';
-
 import '../providers/app_provider.dart';
-
 import '../models/difficulty.dart';
 import '../widgets/learner_widgets.dart';
 
@@ -26,20 +26,18 @@ class AlphabetOrderScreen extends StatefulWidget {
 
 class _AlphabetOrderScreenState extends State<AlphabetOrderScreen>
     with GameSessionUi<AlphabetOrderScreen> {
-  late List<String> _letters; // all letters for this difficulty
-  late List<String> _shuffled; // displayed in this order
+  late List<String> _letters;   // sorted A→Z for this difficulty
+  late List<String> _shuffled;  // randomised display order (changes each session)
   bool _busy = false;
-  int _nextExpected = 0; // index into _letters (sorted)
-  Set<String> _correct = {}; // tapped correctly
-  String? _wrongLetter; // flashes red briefly
+  int _nextExpected = 0;
+  Set<String> _correct = {};
+  String? _wrongLetter;
 
   @override
   void initState() {
     super.initState();
-    _setupRound();
+    _buildSession();
   }
-
-// ── helpers ──────────────────────────────────────────────────────────────
 
   List<String> _lettersForDifficulty() {
     const all = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -53,8 +51,9 @@ class _AlphabetOrderScreenState extends State<AlphabetOrderScreen>
     }
   }
 
-  void _setupRound() {
+  void _buildSession() {
     _letters = _lettersForDifficulty();
+    // Shuffle the display layout — different grid arrangement every session
     _shuffled = List<String>.from(_letters)..shuffle();
     _nextExpected = 0;
     _correct = {};
@@ -62,15 +61,13 @@ class _AlphabetOrderScreenState extends State<AlphabetOrderScreen>
     _busy = false;
   }
 
-  void _restart() => setState(_setupRound);
+  void _restart() => setState(_buildSession);
 
   int get _totalLetters => _letters.length;
   bool get _finished => _correct.length == _totalLetters;
 
-  // ── tap handler ───────────────────────────────────────────────────────────
-
   void _tap(String letter) async {
-    if (_finished || _busy || _correct.contains(letter)) return; // already done
+    if (_finished || _busy || _correct.contains(letter)) return;
     setState(() => _busy = true);
     final provider = context.read<AppProvider>();
 
@@ -86,7 +83,6 @@ class _AlphabetOrderScreenState extends State<AlphabetOrderScreen>
       });
       if (_finished) provider.recordActivityCompleted();
       await Future.delayed(const Duration(milliseconds: 700));
-
       if (!mounted) return;
       if (_finished) {
         await Future.delayed(const Duration(milliseconds: 500));
@@ -97,25 +93,19 @@ class _AlphabetOrderScreenState extends State<AlphabetOrderScreen>
         }
       }
     } else {
-      // Play the existing local feedback effect.
       provider.audio.playWrong();
       setState(() => _wrongLetter = letter);
-      await Future.delayed(const Duration(milliseconds: 700));
-      await Future.delayed(const Duration(milliseconds: 600));
+      await Future.delayed(const Duration(milliseconds: 1300));
       if (mounted) setState(() => _wrongLetter = null);
     }
     if (mounted) setState(() => _busy = false);
   }
-
-  // ── win dialog ────────────────────────────────────────────────────────────
 
   void _showWinDialog() {
     if (resultOpen) return;
     resultOpen = true;
     showGameResult(_restart);
   }
-
-  // ── build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) => GameScaffold(
@@ -148,10 +138,11 @@ class _AlphabetOrderScreenState extends State<AlphabetOrderScreen>
                                 : _wrongLetter == letter
                                     ? false
                                     : null,
-                            onPressed:
-                                _busy || _correct.contains(letter) || resultOpen
-                                    ? null
-                                    : () => _tap(letter))))
+                            onPressed: _busy ||
+                                    _correct.contains(letter) ||
+                                    resultOpen
+                                ? null
+                                : () => _tap(letter))))
                     .toList())),
         if (_wrongLetter != null) const GameFeedback(correct: false),
       ]));

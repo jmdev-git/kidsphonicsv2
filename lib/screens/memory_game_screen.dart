@@ -1,20 +1,23 @@
 // lib/screens/memory_game_screen.dart
+//
+// Pair order randomised every session via GameRoundRandomizer —
+// different subset/order of pairs shown each time (Hard has 8 pairs,
+// always shown in a fresh shuffled layout).
+
 import 'package:flutter/material.dart';
-
 import 'package:provider/provider.dart';
-
 import '../providers/app_provider.dart';
-
 import '../data/letter_data.dart';
 import '../models/difficulty.dart';
+import '../services/game_round_randomizer.dart';
 import '../widgets/learner_widgets.dart';
 
 enum _CardType { letter, picture }
 
 class _MemCard {
-  final String id; // pair identifier
+  final String id;
   final _CardType type;
-  final String display; // letter or emoji
+  final String display;
   final String word;
   bool isFlipped = false;
   bool isMatched = false;
@@ -37,9 +40,10 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
     with GameSessionUi<MemoryGameScreen> {
   late List<_MemCard> _cards;
   List<_MemCard> _flipped = [];
-  Set<String> _wrongCardIds = {}; // tracks cards showing red flash
+  Set<String> _wrongCardIds = {};
   int _matchCount = 0;
   bool _locked = false;
+  int _totalPairs = 0;
 
   @override
   void initState() {
@@ -48,8 +52,12 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
   }
 
   void _initCards() {
-    final source = memoryPairsForDifficulty(widget.difficulty);
-    final pairs = source.toList();
+    final allPairs = memoryPairsForDifficulty(widget.difficulty);
+    // Randomise the order of pairs shown each session
+    final indices = GameRoundRandomizer()
+        .nextSession('memory', widget.difficulty, allPairs.length);
+    final pairs = indices.map((i) => allPairs[i]).toList();
+
     final cards = <_MemCard>[];
     for (final p in pairs) {
       cards.add(_MemCard(
@@ -70,10 +78,9 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
       _wrongCardIds = {};
       _matchCount = 0;
       _locked = false;
+      _totalPairs = pairs.length;
     });
   }
-
-  int get _totalPairs => memoryPairsForDifficulty(widget.difficulty).length;
 
   void _tapCard(_MemCard card) async {
     if (_locked || card.isFlipped || card.isMatched) return;
@@ -87,8 +94,8 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
     if (_flipped.length == 2) {
       _locked = true;
       await Future.delayed(const Duration(milliseconds: 750));
-
       if (!mounted) return;
+
       final a = _flipped[0], b = _flipped[1];
       final isMatch = a.id == b.id && a.type != b.type;
       recordGameAnswer(correct: isMatch);
@@ -113,15 +120,11 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
           _locked = false;
         });
       } else {
-        // Show red flash on mismatched cards — wrong.mp3 only, no voice
         provider.audio.playWrong();
         final wrongA = a.id + a.type.name;
         final wrongB = b.id + b.type.name;
         if (!mounted) return;
-        setState(() {
-          _wrongCardIds = {wrongA, wrongB};
-        });
-        // Hold red flash for 800ms then flip back
+        setState(() => _wrongCardIds = {wrongA, wrongB});
         await Future.delayed(const Duration(milliseconds: 800));
         if (mounted) {
           a.isFlipped = false;
@@ -152,7 +155,8 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
         current: _matchCount,
         total: _totalPairs,
         progressLabel: 'Pairs matched',
-        hasProgress: (scoredAttempts > 0 || _flipped.isNotEmpty) && !resultOpen,
+        hasProgress:
+            (scoredAttempts > 0 || _flipped.isNotEmpty) && !resultOpen,
         child: LayoutBuilder(
             builder: (_, box) => Wrap(
                 spacing: 8,
@@ -171,12 +175,12 @@ class _MemoryGameScreenState extends State<MemoryGameScreen>
                                 : card.word,
                         visual: shown && card.type == _CardType.picture
                             ? GameImageCard(
-                                word: card.word,
-                                label: card.word)
+                                word: card.word, label: card.word)
                             : null,
                         result: card.isMatched
                             ? true
-                            : _wrongCardIds.contains(card.id + card.type.name)
+                            : _wrongCardIds
+                                    .contains(card.id + card.type.name)
                                 ? false
                                 : null,
                         onPressed: _locked ||

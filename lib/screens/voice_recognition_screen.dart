@@ -1,14 +1,15 @@
 // lib/screens/voice_recognition_screen.dart
-import 'package:flutter/material.dart';
+//
+// Word order randomised every session via GameRoundRandomizer.
 
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:permission_handler/permission_handler.dart';
-
 import '../providers/app_provider.dart';
-
 import '../data/letter_data.dart';
 import '../models/difficulty.dart';
+import '../services/game_round_randomizer.dart';
 import '../widgets/learner_widgets.dart';
 
 class VoiceRecognitionScreen extends StatefulWidget {
@@ -16,7 +17,8 @@ class VoiceRecognitionScreen extends StatefulWidget {
   const VoiceRecognitionScreen({super.key, this.difficulty = Difficulty.easy});
 
   @override
-  State<VoiceRecognitionScreen> createState() => _VoiceRecognitionScreenState();
+  State<VoiceRecognitionScreen> createState() =>
+      _VoiceRecognitionScreenState();
 }
 
 class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
@@ -31,52 +33,50 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
 
   String _recognized = '';
   bool? _isCorrect;
+
+  late List<Map<String, String>> _activeWords;
   int _wordIndex = 0;
 
-  List<Map<String, String>> get _words =>
-      voiceWords[widget.difficulty] ?? voiceWords[Difficulty.easy]!;
-
-  Map<String, String> get _current => _words[_wordIndex];
+  Map<String, String> get _current => _activeWords[_wordIndex];
 
   @override
   void initState() {
     super.initState();
+    _buildSession();
+  }
+
+  void _buildSession() {
+    final all = voiceWords[widget.difficulty] ??
+        voiceWords[Difficulty.easy]!;
+    final indices = GameRoundRandomizer()
+        .nextSession('voice', widget.difficulty, all.length);
+    _activeWords = indices.map((i) => all[i]).toList();
+    _wordIndex = 0;
+    _recognized = '';
+    _isCorrect = null;
   }
 
   Future<void> _initSpeech() async {
     try {
-      // Step 1: Explicitly request microphone permission first
       final status = await Permission.microphone.request();
       if (!mounted) return;
-
       if (status.isDenied || status.isPermanentlyDenied) {
-        // Permission refused — mark as unavailable and show message
-        if (mounted) {
-          setState(() {
-            _isAvailable = false;
-            _isInitialized = true;
-          });
-        }
+        if (mounted) setState(() { _isAvailable = false; _isInitialized = true; });
         return;
       }
-
-      // Step 2: Permission granted — initialize speech_to_text
-      // Retry up to 2 times in case the first attempt fails on some devices
       for (int attempt = 0; attempt < 2; attempt++) {
         if (!mounted) return;
         _isAvailable = await _speech.initialize(
-          onStatus: (status) {
-            if (status == 'done' || status == 'notListening') {
+          onStatus: (s) {
+            if (s == 'done' || s == 'notListening') {
               if (mounted) setState(() => _isListening = false);
             }
           },
-          onError: (error) {
+          onError: (_) {
             if (mounted) setState(() => _isListening = false);
           },
         ).timeout(const Duration(seconds: 6), onTimeout: () => false);
-
         if (_isAvailable) break;
-        // Short delay before retry
         await Future.delayed(const Duration(milliseconds: 500));
       }
     } catch (_) {
@@ -120,9 +120,7 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
         onResult: (result) {
           if (mounted && generation == _listenGeneration && !resultOpen) {
             setState(() => _recognized = result.recognizedWords);
-            if (result.finalResult) {
-              _evaluate(result.recognizedWords);
-            }
+            if (result.finalResult) _evaluate(result.recognizedWords);
           }
         },
         listenOptions: stt.SpeechListenOptions(
@@ -133,10 +131,7 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
       );
     } catch (_) {
       if (mounted && generation == _listenGeneration) {
-        setState(() {
-          _isListening = false;
-          _isAvailable = false;
-        });
+        setState(() { _isListening = false; _isAvailable = false; });
       }
     }
   }
@@ -150,17 +145,11 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
     final target = _current['word']!.toLowerCase().trim();
     final heard = recognized.toLowerCase().trim();
 
-    // Difficulty-based matching:
-    // Easy   — loose: target appears anywhere in heard, or levenshtein ≤ 1
-    // Medium — moderate: must contain target exactly, or levenshtein ≤ 1
-    //          (removed target.contains(heard) so short heard can't match long words)
-    // Hard   — strict: exact match or levenshtein ≤ 1 only (no substring tricks)
     bool isCorrect;
     final lev = _levenshtein(target, heard);
     switch (widget.difficulty) {
       case Difficulty.easy:
-        isCorrect =
-            heard.contains(target) || target.contains(heard) || lev <= 1;
+        isCorrect = heard.contains(target) || target.contains(heard) || lev <= 1;
         break;
       case Difficulty.medium:
         isCorrect = heard.contains(target) || lev <= 1;
@@ -170,11 +159,7 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
         break;
     }
 
-    setState(() {
-      _isCorrect = isCorrect;
-      _isListening = false;
-    });
-
+    setState(() { _isCorrect = isCorrect; _isListening = false; });
     final provider = context.read<AppProvider>();
     scoredAttempts++;
     if (isCorrect) correctAttempts++;
@@ -182,17 +167,15 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
       awardGameXp((10 * widget.difficulty.xpMultiplier).round());
       awardGameStar();
       provider.audio.playCorrect();
-      // No AI voice — correct.mp3 tone is sufficient feedback
     } else {
       provider.audio.playWrong();
-      // No AI voice — wrong.mp3 tone + result card shows "I heard: ..." feedback
     }
   }
 
   void _nextWord() {
     if (_isCorrect == null || _isListening || resultOpen) return;
     _listenGeneration++;
-    if (_wordIndex < _words.length - 1) {
+    if (_wordIndex < _activeWords.length - 1) {
       setState(() {
         _wordIndex++;
         _recognized = '';
@@ -209,26 +192,17 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
     resultOpen = true;
     awardGameXp(15);
     context.read<AppProvider>().audio.playWin();
-    showGameResult(() => setState(() {
-          _wordIndex = 0;
-          _recognized = '';
-          _isCorrect = null;
-        }));
+    showGameResult(() => setState(_buildSession));
   }
 
-  /// Simple Levenshtein distance for fuzzy matching (≤1 typo = accept)
   int _levenshtein(String a, String b) {
     if (a == b) return 0;
     if (a.isEmpty) return b.length;
     if (b.isEmpty) return a.length;
     final matrix =
         List.generate(a.length + 1, (i) => List.filled(b.length + 1, 0));
-    for (int i = 0; i <= a.length; i++) {
-      matrix[i][0] = i;
-    }
-    for (int j = 0; j <= b.length; j++) {
-      matrix[0][j] = j;
-    }
+    for (int i = 0; i <= a.length; i++) { matrix[i][0] = i; }
+    for (int j = 0; j <= b.length; j++) { matrix[0][j] = j; }
     for (int i = 1; i <= a.length; i++) {
       for (int j = 1; j <= b.length; j++) {
         final cost = a[i - 1] == b[j - 1] ? 0 : 1;
@@ -246,7 +220,6 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
   void dispose() {
     _listenGeneration++;
     _speech.stop();
-
     super.dispose();
   }
 
@@ -256,7 +229,7 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
       instructions: 'Hear the word. Say the word clearly.',
       difficulty: widget.difficulty,
       current: _wordIndex + 1,
-      total: _words.length,
+      total: _activeWords.length,
       hasProgress: scoredAttempts > 0 && !resultOpen,
       onLeave: () => _speech.stop(),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -267,7 +240,8 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
         Text(_current['word'] ?? 'Content unavailable.',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold)),
-        AudioButton(phrase: _current['word'] ?? '', enabled: !_isListening),
+        AudioButton(
+            phrase: _current['word'] ?? '', enabled: !_isListening),
         const SizedBox(height: 16),
         if (!_isInitialized) ...[
           const Text(
@@ -277,10 +251,12 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
         ],
         const Text('Say the word clearly.', textAlign: TextAlign.center),
         ElevatedButton.icon(
-            onPressed: _requestingPermission || _isCorrect == true || resultOpen
-                ? null
-                : _listen,
-            icon: Icon(_isListening ? Icons.stop_circle_outlined : Icons.mic),
+            onPressed:
+                _requestingPermission || _isCorrect == true || resultOpen
+                    ? null
+                    : _listen,
+            icon: Icon(
+                _isListening ? Icons.stop_circle_outlined : Icons.mic),
             label: Text(_requestingPermission
                 ? 'Getting Ready…'
                 : _isListening
@@ -290,12 +266,13 @@ class _VoiceRecognitionScreenState extends State<VoiceRecognitionScreen>
           const Text(
               'Microphone or speech recognition is unavailable. Ask a parent to check device settings.'),
         if (_recognized.isNotEmpty)
-          Text('I heard: $_recognized', style: const TextStyle(fontSize: 22)),
+          Text('I heard: $_recognized',
+              style: const TextStyle(fontSize: 22)),
         if (_isCorrect != null)
           Text(_isCorrect! ? 'Recognized' : 'Try Again',
               textAlign: TextAlign.center,
-              style:
-                  const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              style: const TextStyle(
+                  fontSize: 24, fontWeight: FontWeight.bold)),
         if (_isCorrect != null) GameFeedback(correct: _isCorrect!),
         if (_isCorrect != null)
           ElevatedButton(

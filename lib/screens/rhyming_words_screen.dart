@@ -6,15 +6,16 @@ import '../widgets/mascot_guide.dart';
 // Easy  : 3 choices, very simple CVC rhymes (cat/bat, dog/log…)
 // Medium: 4 choices, slightly longer words
 // Hard  : 5 choices, trickier rhymes with more distractors
+//
+// Round order is randomised every session via GameRoundRandomizer —
+// never starts on the same round twice in a row.
 
 import 'package:flutter/material.dart';
-
 import 'package:provider/provider.dart';
-
 import '../data/phonics_activity_data.dart';
 import '../providers/app_provider.dart';
 import '../models/difficulty.dart';
-
+import '../services/game_round_randomizer.dart';
 import '../widgets/learner_widgets.dart';
 import '../theme/kids_ui.dart';
 
@@ -28,33 +29,36 @@ class RhymingWordsScreen extends StatefulWidget {
 
 class _RhymingWordsScreenState extends State<RhymingWordsScreen>
     with GameSessionUi<RhymingWordsScreen> {
+  late List<RhymeRound> _activeRounds;
   int _roundIndex = 0;
   String? _picked;
   bool _answered = false;
+  late List<RhymeOption> _shuffledOptions;
 
-  late List<RhymeOption> _shuffled;
-
-  List<RhymeRound> get _rounds => rhymeRoundsForDifficulty(widget.difficulty);
-  RhymeRound get _round => _rounds[_roundIndex];
+  List<RhymeRound> get _allRounds =>
+      rhymeRoundsForDifficulty(widget.difficulty);
+  RhymeRound get _round => _activeRounds[_roundIndex];
 
   @override
   void initState() {
     super.initState();
+    _buildSession();
+  }
+
+  // Build a fresh randomised session — different start each play.
+  void _buildSession() {
+    final all = _allRounds;
+    final indices = GameRoundRandomizer()
+        .nextSession('rhyming', widget.difficulty, all.length);
+    _activeRounds = indices.map((i) => all[i]).toList();
+    _roundIndex = 0;
+    _picked = null;
+    _answered = false;
     _shuffleOptions();
   }
 
   void _shuffleOptions() {
-    _shuffled = List<RhymeOption>.from(_round.options)..shuffle();
-  }
-
-  void _restart() {
-    setState(() {
-      _roundIndex = 0;
-      _picked = null;
-      _answered = false;
-
-      _shuffleOptions();
-    });
+    _shuffledOptions = List<RhymeOption>.from(_round.options)..shuffle();
   }
 
   void _pick(String word) async {
@@ -64,7 +68,6 @@ class _RhymingWordsScreenState extends State<RhymingWordsScreen>
       _picked = word;
       _answered = true;
     });
-
     final provider = context.read<AppProvider>();
     recordGameAnswer(correct: isCorrect);
     if (isCorrect) {
@@ -78,7 +81,7 @@ class _RhymingWordsScreenState extends State<RhymingWordsScreen>
 
   void _next() {
     if (!_answered || resultOpen) return;
-    if (_roundIndex < _rounds.length - 1) {
+    if (_roundIndex < _activeRounds.length - 1) {
       setState(() {
         _roundIndex++;
         _picked = null;
@@ -89,6 +92,8 @@ class _RhymingWordsScreenState extends State<RhymingWordsScreen>
       _showResults();
     }
   }
+
+  void _restart() => setState(_buildSession);
 
   void _showResults() {
     if (resultOpen) return;
@@ -109,30 +114,35 @@ class _RhymingWordsScreenState extends State<RhymingWordsScreen>
         difficulty: widget.difficulty,
         hasProgress: scoredAttempts > 0 && !resultOpen,
         current: _roundIndex + 1,
-        total: _rounds.length,
+        total: _activeRounds.length,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Center(child: GameImageCard(
-              word: _round.word[0] + _round.word.substring(1).toLowerCase())),
+          Center(
+              child: GameImageCard(
+                  word: _round.word[0] +
+                      _round.word.substring(1).toLowerCase())),
           const SizedBox(height: KidsUi.padding),
           Text('What rhymes with ${_round.word}?',
               textAlign: TextAlign.center,
               style:
                   const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
           AudioButton(
-              phrase: _round.word[0] + _round.word.substring(1).toLowerCase()),
+              phrase:
+                  _round.word[0] + _round.word.substring(1).toLowerCase()),
           const SizedBox(height: KidsUi.section),
-          ..._shuffled.map((option) => GameAnswerButton(
+          ..._shuffledOptions.map((option) => GameAnswerButton(
               label: option.word,
               visual: GameImageCard(
-                  word: option.word[0] + option.word.substring(1).toLowerCase(),
+                  word: option.word[0] +
+                      option.word.substring(1).toLowerCase(),
                   label: option.word),
               selected: _picked == option.word,
               result: _picked == option.word
                   ? option.word == _round.correctRhyme
                   : null,
-              onPressed:
-                  _answered || resultOpen ? null : () => _pick(option.word))),
+              onPressed: _answered || resultOpen
+                  ? null
+                  : () => _pick(option.word))),
           if (_picked != null)
             GameFeedback(correct: _picked == _round.correctRhyme),
           if (_answered)

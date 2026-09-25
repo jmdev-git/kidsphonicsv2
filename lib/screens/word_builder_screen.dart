@@ -1,12 +1,13 @@
 // lib/screens/word_builder_screen.dart
+//
+// Puzzle order randomised every session via GameRoundRandomizer.
+
 import 'package:flutter/material.dart';
-
 import 'package:provider/provider.dart';
-
 import '../data/phonics_activity_data.dart';
 import '../providers/app_provider.dart';
-
 import '../models/difficulty.dart';
+import '../services/game_round_randomizer.dart';
 import '../widgets/learner_widgets.dart';
 
 class WordBuilderScreen extends StatefulWidget {
@@ -18,27 +19,31 @@ class WordBuilderScreen extends StatefulWidget {
 
 class _WordBuilderScreenState extends State<WordBuilderScreen>
     with GameSessionUi<WordBuilderScreen> {
+  late List<WordPuzzle> _activePuzzles;
   int _puzzleIndex = 0;
   bool? _feedback;
 
-  // For multi-blank: track which blank is currently being filled (0-based)
   int _activeBlankIndex = 0;
-  // Filled answers so far — index = blank slot index
   late List<String?> _filledAnswers;
-
   bool _busy = false;
-  bool _allCorrect = false; // true when all blanks filled correctly
-
-  List<WordPuzzle> get _activePuzzles =>
-      wordPuzzlesForDifficulty(widget.difficulty);
-  WordPuzzle get _puzzle => _activePuzzles[_puzzleIndex];
+  bool _allCorrect = false;
   late List<String> _shuffledTiles;
 
+  WordPuzzle get _puzzle => _activePuzzles[_puzzleIndex];
   int get _blankCount => _puzzle.correctLetters.length;
 
   @override
   void initState() {
     super.initState();
+    _buildSession();
+  }
+
+  void _buildSession() {
+    final all = wordPuzzlesForDifficulty(widget.difficulty);
+    final indices = GameRoundRandomizer()
+        .nextSession('word_builder', widget.difficulty, all.length);
+    _activePuzzles = indices.map((i) => all[i]).toList();
+    _puzzleIndex = 0;
     _initPuzzle();
   }
 
@@ -50,11 +55,9 @@ class _WordBuilderScreenState extends State<WordBuilderScreen>
     _shuffledTiles = List<String>.from(_puzzle.tiles)..shuffle();
   }
 
-  // ── tap a letter tile ──────────────────────────────────────────────────
   void _tapTile(String letter) async {
     if (_allCorrect || _busy || resultOpen) return;
     _busy = true;
-    // Still blanks left to fill
     if (_activeBlankIndex >= _blankCount) return;
 
     final provider = context.read<AppProvider>();
@@ -70,9 +73,7 @@ class _WordBuilderScreenState extends State<WordBuilderScreen>
         _activeBlankIndex++;
         if (_activeBlankIndex >= _blankCount) _allCorrect = true;
       });
-
       if (_allCorrect) {
-        // All blanks correct — play correct.mp3 tone only
         provider.audio.playCorrect();
         awardGameXp((10 * widget.difficulty.xpMultiplier).round());
         awardGameStar();
@@ -87,24 +88,17 @@ class _WordBuilderScreenState extends State<WordBuilderScreen>
           _showWinDialog();
         }
       } else {
-        // Correct blank filled — play correct.mp3, move to next blank
         provider.audio.playCorrect();
         await Future.delayed(const Duration(milliseconds: 300));
       }
     } else {
-      // Wrong letter — play wrong.mp3 only, no voice
       provider.audio.playWrong();
       await Future.delayed(const Duration(milliseconds: 300));
     }
     if (mounted) setState(() => _busy = false);
   }
 
-  void _restart() {
-    setState(() {
-      _puzzleIndex = 0;
-      _initPuzzle();
-    });
-  }
+  void _restart() => setState(_buildSession);
 
   void _showWinDialog() {
     if (resultOpen) return;
@@ -116,7 +110,6 @@ class _WordBuilderScreenState extends State<WordBuilderScreen>
     showGameResult(_restart);
   }
 
-  // ── Build the word display row ─────────────────────────────────────────
   Widget _buildWordRow() {
     var blank = 0;
     final word = _puzzle.blanks
@@ -137,12 +130,15 @@ class _WordBuilderScreenState extends State<WordBuilderScreen>
       total: _activePuzzles.length,
       hasProgress: scoredAttempts > 0 && !resultOpen,
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Center(child: GameImageCard(
-            word: _puzzle.word[0] + _puzzle.word.substring(1).toLowerCase())),
+        Center(
+            child: GameImageCard(
+                word: _puzzle.word[0] +
+                    _puzzle.word.substring(1).toLowerCase())),
         const SizedBox(height: 16),
         _buildWordRow(),
         AudioButton(
-            phrase: _puzzle.word[0] + _puzzle.word.substring(1).toLowerCase()),
+            phrase:
+                _puzzle.word[0] + _puzzle.word.substring(1).toLowerCase()),
         const SizedBox(height: 16),
         ..._shuffledTiles.map((letter) => GameAnswerButton(
             label: letter,
